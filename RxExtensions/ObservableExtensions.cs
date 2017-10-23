@@ -13,7 +13,7 @@ public static class ObservableExtensions
         scheduler = scheduler ?? Scheduler.Default;
 
         var sync = new object();
-        var count = 0;
+        var subscriberCount = 0;
         IDisposable connection = null;
         CancellationTokenSource disconnectionCancellationToken = null;
 
@@ -21,15 +21,16 @@ public static class ObservableExtensions
         {
             lock (sync)
             {
-                if (count++ == 0)
+                if (subscriberCount++ == 0)
                 {
                     // First subscriber; need to connect the connectable
 
-                    // Special case: If the previous disconnection is still pending, do not connect again
+                    // Special case: If a previous disconnection is still pending, cancel the pending
+                    // disconnection schedule and do not connect again
                     if (disconnectionCancellationToken != null)
                     {
-                        // In that case, cancel the disconnection
                         disconnectionCancellationToken.Cancel();
+                        disconnectionCancellationToken = null;
                     }
                     else
                     {
@@ -46,7 +47,7 @@ public static class ObservableExtensions
                 subscription.Dispose();
                 lock (sync)
                 {
-                    if (--count == 0)
+                    if (--subscriberCount == 0)
                     {
                         // Last subscriber; schedule a disconnect after a delay
                         ScheduleDisconnection();
@@ -69,7 +70,7 @@ public static class ObservableExtensions
                     lock (sync)
                     {
                         // Check the disconnectionCancellationToken hasn't changed; that would mean the
-                        // current disconnect has been cancel right before this method was called
+                        // current disconnect has been cancelled right before this method was called
                         // ReSharper disable once AccessToModifiedClosure
                         if (ReferenceEquals(cancellationToken, disconnectionCancellationToken))
                         {
