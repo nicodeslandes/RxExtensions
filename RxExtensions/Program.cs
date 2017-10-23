@@ -41,7 +41,7 @@ namespace RxExtensions
             Console.WriteLine("Stopping S3");
             s3.Dispose();
             Console.WriteLine("S3 stopped");
-            Thread.Sleep(4000);
+            Thread.Sleep(6000);
 
             Console.WriteLine("Press Enter to quit");
             Console.ReadLine();
