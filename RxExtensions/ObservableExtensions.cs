@@ -134,10 +134,51 @@ namespace RxExtensions
                 Disposable.Create(action)));
         }
 
+        /// <summary>
+        /// This operator ensures that an observable only produces items under a given rate, expressed as a minimum delay
+        /// between 2 consecutive items.
+        /// 2 implementations are used depending on the <paramref name="ensureLastItemsAreReplayed"/> parameter.
+        /// if this is <c>true</c>, if no item is produced for a delay longer than
+        /// <paramref name="minDelayBetweenItems"/>, then the item before that delay is guaranteed to be yielded (after
+        /// potentially a delay to ensure <paramref name="minDelayBetweenItems"/> is respected).
+        /// If <paramref name="ensureLastItemsAreReplayed"/> is <c>false</c>, then no such guarantee is made, but the
+        /// implementation is much more efficient: it requires no per-item allocation, and it's lock-free. It is
+        /// therefore the default, and is recommended in case of high throughput from <paramref name="src"/>.
+        /// </summary>
+        /// <typeparam name="T">Type of the source items</typeparam>
+        /// <param name="src">Source observable</param>
+        /// <param name="minDelayBetweenItems">The minimum delay to be enforced between items of the
+        /// resulting observable</param>
+        /// <param name="ensureLastItemsAreReplayed">If set to <c>true</c> any item that isn't followed by another item
+        /// within <paramref name="minDelayBetweenItems"/> is guaranteed to be yielded. Warning, this requires a much
+        /// more costly implementation and therefore shouldn't be used for observable with a high throughput</param>
+        /// <param name="scheduler">Scheduler to use</param>
+        /// <returns>An observable guaranteed to only issue items separated by at
+        /// least <paramref name="minDelayBetweenItems"/></returns>
         public static IObservable<T> RateLimit<T>(this IObservable<T> src, TimeSpan minDelayBetweenItems,
             bool ensureLastItemsAreReplayed = false, IScheduler scheduler = null)
         {
             scheduler = scheduler ?? Scheduler.Default;
+
+            if (!ensureLastItemsAreReplayed)
+            {
+                // Simple implementation in case there's no need to ensure last items before a long pause are yielded
+                // if they haven't been yielded yet
+                return Observable.Create<T>(obs =>
+                {
+                    var lastIssuedTimestamp = DateTimeOffset.MinValue;
+                    return src.Subscribe(item =>
+                    {
+                        var itemTimestamp = scheduler.Now;
+                        if (itemTimestamp - lastIssuedTimestamp >= minDelayBetweenItems)
+                        {
+                            lastIssuedTimestamp = itemTimestamp;
+                            obs.OnNext(item);
+                        }
+                    },
+                    obs.OnError, obs.OnCompleted);
+                });
+            }
 
             return Observable.Create<T>(obs =>
             {
@@ -145,6 +186,7 @@ namespace RxExtensions
                 IDisposable currentSchedule = null;
                 T savedItem = default;
                 var lastIssuedTimestamp = DateTimeOffset.MinValue;
+
                 return src.Subscribe(item =>
                 {
                     var itemTimestamp = scheduler.Now;
@@ -152,77 +194,69 @@ namespace RxExtensions
                     {
                         lock (sync)
                         {
-                            lastIssuedTimestamp = itemTimestamp;
-                            Console.WriteLine($"Item {item}: yielded");
-
-                            if (currentSchedule != null)
-                            {
-                                Console.WriteLine($"Item {item}: cancelling timer (saved item: {savedItem})");
-                                currentSchedule.Dispose();
-                                currentSchedule = null;
-                            }
-                            obs.OnNext(item);
+                            Debug.WriteLine($"Item {item}: yielding item");
+                            YieldItem(item);
                         }
                     }
-                    else if (ensureLastItemsAreReplayed)
+                    else
                     {
                         lock (sync)
                         {
                             // We're skipping an item; if no item occurs after "minDelayBetweenItems" we have to
                             // yield it then
-                            Console.WriteLine($"Item {item}: skipped, saving as item");
+                            Debug.WriteLine($"Item {item}: skipped, saving as delayed item");
                             savedItem = item;
                             if (currentSchedule == null)
                             {
-                                Console.WriteLine($"Item {item}: scheduling delayed yield");
-                                currentSchedule = scheduler.Schedule(itemTimestamp + minDelayBetweenItems,
-                                    () =>
-                                    {
-                                        lock (sync)
-                                        {
-                                            // Check the currentSchedule variable; it might have been cleared  in the
-                                            // YieldPendingItemBeforeTermination function while we were
-                                            // acquiring the lock
-                                            if (currentSchedule != null)
-                                            {
-                                                currentSchedule = null;
-                                                Console.WriteLine($"Item {savedItem}: issuing delayed item");
-                                                lastIssuedTimestamp = scheduler.Now;
-                                                obs.OnNext(savedItem);
-
-                                                // Reset saved item to avoid a dangling reference
-                                                savedItem = default;
-                                            }
-                                        }
-                                    });
+                                Debug.WriteLine($"Item {item}: scheduling delayed yield");
+                                currentSchedule =
+                                    scheduler.Schedule(itemTimestamp + minDelayBetweenItems, YieldPendingItem);
                             }
                         }
                     }
                 },
                 ex =>
                 {
-                    // If there is a pending item to be yielded, do it now before completing the observable
-                    YieldPendingItemBeforeTermination();
+                    // If there is a pending item to be yielded, yield it now before completing the observable
+                    YieldPendingItem();
                     obs.OnError(ex);
                 },
                 () =>
                 {
-                    // If there is a pending item to be yielded, do it now before completing the observable
-                    YieldPendingItemBeforeTermination();
+                    // If there is a pending item to be yielded, yield it now before completing the observable
+                    YieldPendingItem();
                     obs.OnCompleted();
                 });
 
-                void YieldPendingItemBeforeTermination()
+                void YieldPendingItem()
                 {
                     lock (sync)
                     {
+                        // Check the currentSchedule variable if it's now null, it means any pending item was
+                        // already yielded; in that case there's nothing to do
                         if (currentSchedule != null)
                         {
-                            currentSchedule.Dispose();
-                            obs.OnNext(savedItem);
+                            Debug.WriteLine($"Item {savedItem}: issuing delayed item");
+                            YieldItem(savedItem);
                         }
                     }
                 }
+
+                void YieldItem(T item)
+                {
+                    // Note: This function is to always be called under a lock
+
+                    // Cancel any pending schedule
+                    currentSchedule?.Dispose();
+                    currentSchedule = null;
+
+                    lastIssuedTimestamp = scheduler.Now;
+                    obs.OnNext(item);
+
+                    // Reset saved item to avoid a dangling reference
+                    savedItem = default;
+                }
+
             });
         }
     }
