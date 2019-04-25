@@ -126,5 +126,25 @@ namespace RxExtensions
                 src.Subscribe(obs),
                 Disposable.Create(action)));
         }
+
+        public static IObservable<T> RateLimit<T>(this IObservable<T> src, TimeSpan minDelayBetweenItems,
+            IScheduler scheduler = null)
+        {
+            scheduler = scheduler ?? Scheduler.Default;
+            return Observable.Create<T>(obs =>
+            {
+                var lastIssuedTimestamp = DateTimeOffset.MinValue;
+                return src.Subscribe(item =>
+                {
+                    var itemTimestamp = scheduler.Now;
+                    if (itemTimestamp - lastIssuedTimestamp >= minDelayBetweenItems)
+                    {
+                        lastIssuedTimestamp = itemTimestamp;
+                        obs.OnNext(item);
+                    }
+                },
+                obs.OnError, obs.OnCompleted);
+            });
+        }
     }
 }
