@@ -135,22 +135,94 @@ namespace RxExtensions
         }
 
         public static IObservable<T> RateLimit<T>(this IObservable<T> src, TimeSpan minDelayBetweenItems,
-            IScheduler scheduler = null)
+            bool ensureLastItemsAreReplayed = false, IScheduler scheduler = null)
         {
             scheduler = scheduler ?? Scheduler.Default;
+
             return Observable.Create<T>(obs =>
             {
+                var sync = new object();
+                IDisposable currentSchedule = null;
+                T savedItem = default;
                 var lastIssuedTimestamp = DateTimeOffset.MinValue;
                 return src.Subscribe(item =>
                 {
                     var itemTimestamp = scheduler.Now;
                     if (itemTimestamp - lastIssuedTimestamp >= minDelayBetweenItems)
                     {
-                        lastIssuedTimestamp = itemTimestamp;
-                        obs.OnNext(item);
+                        lock (sync)
+                        {
+                            lastIssuedTimestamp = itemTimestamp;
+                            Console.WriteLine($"Item {item}: yielded");
+
+                            if (currentSchedule != null)
+                            {
+                                Console.WriteLine($"Item {item}: cancelling timer (saved item: {savedItem})");
+                                currentSchedule.Dispose();
+                                currentSchedule = null;
+                            }
+                            obs.OnNext(item);
+                        }
+                    }
+                    else if (ensureLastItemsAreReplayed)
+                    {
+                        lock (sync)
+                        {
+                            // We're skipping an item; if no item occurs after "minDelayBetweenItems" we have to
+                            // yield it then
+                            Console.WriteLine($"Item {item}: skipped, saving as item");
+                            savedItem = item;
+                            if (currentSchedule == null)
+                            {
+                                Console.WriteLine($"Item {item}: scheduling delayed yield");
+                                currentSchedule = scheduler.Schedule(itemTimestamp + minDelayBetweenItems,
+                                    () =>
+                                    {
+                                        lock (sync)
+                                        {
+                                            // Check the currentSchedule variable; it might have been cleared  in the
+                                            // YieldPendingItemBeforeTermination function while we were
+                                            // acquiring the lock
+                                            if (currentSchedule != null)
+                                            {
+                                                currentSchedule = null;
+                                                Console.WriteLine($"Item {savedItem}: issuing delayed item");
+                                                lastIssuedTimestamp = scheduler.Now;
+                                                obs.OnNext(savedItem);
+
+                                                // Reset saved item to avoid a dangling reference
+                                                savedItem = default;
+                                            }
+                                        }
+                                    });
+                            }
+                        }
                     }
                 },
-                obs.OnError, obs.OnCompleted);
+                ex =>
+                {
+                    // If there is a pending item to be yielded, do it now before completing the observable
+                    YieldPendingItemBeforeTermination();
+                    obs.OnError(ex);
+                },
+                () =>
+                {
+                    // If there is a pending item to be yielded, do it now before completing the observable
+                    YieldPendingItemBeforeTermination();
+                    obs.OnCompleted();
+                });
+
+                void YieldPendingItemBeforeTermination()
+                {
+                    lock (sync)
+                    {
+                        if (currentSchedule != null)
+                        {
+                            currentSchedule.Dispose();
+                            obs.OnNext(savedItem);
+                        }
+                    }
+                }
             });
         }
     }
