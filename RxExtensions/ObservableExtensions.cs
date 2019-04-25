@@ -101,6 +101,13 @@ namespace RxExtensions
                             // ReSharper disable once AccessToModifiedClosure
                             if (ReferenceEquals(cancellationToken, disconnectionCancellationToken))
                             {
+                                // Dispose and reset the disconnectionCancellationToken so that a future connect can
+                                // happen
+                                disconnectionCancellationToken?.Dispose();
+                                disconnectionCancellationToken = null;
+
+                                // All subscribers have unsubscribed, and no-one resubcribed after the delay
+                                // We can disconnect from the connectable observable
                                 connection?.Dispose();
                                 connection = null;
                             }
