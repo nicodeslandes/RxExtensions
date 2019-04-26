@@ -8,6 +8,26 @@ namespace RxExtensions
     {
         static void Main(string[] args)
         {
+            TestDelayedRefCount();
+            TestRateLimit();
+        }
+
+        static void TestRateLimit()
+        {
+            var src = Observable.Generate(1, v => v < 50, v => v + 1, v => v,
+                v => TimeSpan.FromSeconds(v == 11 ? 3 : (v % 10) / 100.0));
+
+            src.Subscribe(x => Console.WriteLine($"src: {x}"));
+
+            src.RateLimit(TimeSpan.FromSeconds(1), true).Timestamp()
+                .Subscribe(x => Console.WriteLine(x));
+            Console.WriteLine("Press Enter to quit");
+            Console.ReadLine();
+
+        }
+
+        static void TestDelayedRefCount()
+        {
             var src = Observable.Interval(TimeSpan.FromSeconds(1))
                 .OnSubscribe(() => Console.WriteLine("New subscriber"))
                 .OnUnsubscribed(() => Console.WriteLine("Unsubscribed"))
@@ -16,7 +36,6 @@ namespace RxExtensions
             var refCounted = src
                 .Publish()
                 .DelayedRefCount(TimeSpan.FromSeconds(5));
-            //.RefCount();
 
             Console.WriteLine("Starting S1");
             var s1 = refCounted.Subscribe(i => Console.WriteLine($"S1: {i}"));
@@ -41,6 +60,11 @@ namespace RxExtensions
             Console.WriteLine("Stopping S3");
             s3.Dispose();
             Console.WriteLine("S3 stopped");
+            Thread.Sleep(6000);
+
+            var s4 = refCounted.Subscribe(i => Console.WriteLine($"S4: {i}"));
+            Thread.Sleep(4000);
+            s4.Dispose();
             Thread.Sleep(6000);
 
             Console.WriteLine("Press Enter to quit");
