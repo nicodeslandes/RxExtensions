@@ -216,11 +216,24 @@ namespace RxExtensions
                             savedItem = item;
                             if (currentSchedule == null)
                             {
-                                Debug.WriteLine($"Item {item}: scheduling delayed yield");
-                                var newSchedule = new SingleAssignmentDisposable();
-                                newSchedule.Disposable = scheduler.Schedule(lastIssuedTimestamp + minDelayBetweenItems,
-                                    () => YieldPendingItem(newSchedule));
-                                currentSchedule = newSchedule;
+                                // We need to start a new scheduler
+                                // Check when it should fire; it might be in the past now
+                                var scheduleDelay = lastIssuedTimestamp + minDelayBetweenItems - scheduler.Now;
+                                if (scheduleDelay <= TimeSpan.Zero)
+                                {
+                                    // Now that we've acquired the lock, we've gone past the required yield time, so
+                                    // we can yield the item immediately
+                                    Debug.WriteLine($"Item {item}: yielding item");
+                                    YieldItem(item);
+                                }
+                                else
+                                {
+                                    Debug.WriteLine($"Item {item}: scheduling delayed yield");
+                                    var newSchedule = new SingleAssignmentDisposable();
+                                    newSchedule.Disposable = scheduler.Schedule(scheduleDelay,
+                                        () => YieldPendingItem(newSchedule));
+                                    currentSchedule = newSchedule;
+                                }
                             }
                         }
                     }
