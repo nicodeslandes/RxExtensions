@@ -137,30 +137,34 @@ namespace RxExtensions
         /// <summary>
         /// This operator ensures that an observable only produces items under a given rate, expressed as a minimum delay
         /// between 2 consecutive items.
-        /// 2 implementations are used depending on the <paramref name="ensureLastItemsAreReplayed"/> parameter.
+        /// </summary>
+        /// <remarks>
+        /// 2 implementations are used depending on the <paramref name="ensureYieldAfterLongDelay"/> parameter.
         /// if this is <c>true</c>, if no item is produced for a delay longer than
         /// <paramref name="minDelayBetweenItems"/>, then the item before that delay is guaranteed to be yielded (after
         /// potentially a delay to ensure <paramref name="minDelayBetweenItems"/> is respected).
-        /// If <paramref name="ensureLastItemsAreReplayed"/> is <c>false</c>, then no such guarantee is made, but the
+        /// If <paramref name="ensureYieldAfterLongDelay"/> is <c>false</c>, then no such guarantee is made, but the
         /// implementation is much more efficient: it requires no per-item allocation, and it's lock-free. It is
         /// therefore the default, and is recommended in case of high throughput from <paramref name="src"/>.
-        /// </summary>
+        /// </remarks>
         /// <typeparam name="T">Type of the source items</typeparam>
         /// <param name="src">Source observable</param>
         /// <param name="minDelayBetweenItems">The minimum delay to be enforced between items of the
-        /// resulting observable</param>
-        /// <param name="ensureLastItemsAreReplayed">If set to <c>true</c> any item that isn't followed by another item
-        /// within <paramref name="minDelayBetweenItems"/> is guaranteed to be yielded. Warning, this requires a much
-        /// more costly implementation and therefore shouldn't be used for observable with a high throughput</param>
+        ///                                    resulting observable</param>
+        /// <param name="ensureYieldAfterLongDelay">If set to <c>true</c>, any item that isn't followed by another item
+        ///                                          within <paramref name="minDelayBetweenItems"/> is guaranteed to be
+        ///                                          yielded. Warning, this requires a much more costly implementation
+        ///                                          and therefore shouldn't be used for observables with a
+        ///                                          high throughput</param>
         /// <param name="scheduler">Scheduler to use</param>
         /// <returns>An observable guaranteed to only issue items separated by at
-        /// least <paramref name="minDelayBetweenItems"/></returns>
+        ///          least <paramref name="minDelayBetweenItems"/></returns>
         public static IObservable<T> RateLimit<T>(this IObservable<T> src, TimeSpan minDelayBetweenItems,
-            bool ensureLastItemsAreReplayed = false, IScheduler scheduler = null)
+            bool ensureYieldAfterLongDelay = false, IScheduler scheduler = null)
         {
             scheduler = scheduler ?? Scheduler.Default;
 
-            if (!ensureLastItemsAreReplayed)
+            if (!ensureYieldAfterLongDelay)
             {
                 // Simple implementation in case there's no need to ensure last items before a long pause are yielded
                 // if they haven't been yielded yet
