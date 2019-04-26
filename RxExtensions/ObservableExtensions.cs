@@ -162,6 +162,10 @@ namespace RxExtensions
         public static IObservable<T> RateLimit<T>(this IObservable<T> src, TimeSpan minDelayBetweenItems,
             bool ensureYieldAfterLongDelay = false, IScheduler scheduler = null)
         {
+            if (src == null) throw new ArgumentNullException(nameof(src));
+            if (minDelayBetweenItems <= TimeSpan.Zero)
+                throw new ArgumentException("Invalid value", nameof(minDelayBetweenItems));
+
             scheduler = scheduler ?? Scheduler.Default;
 
             if (!ensureYieldAfterLongDelay)
@@ -213,32 +217,36 @@ namespace RxExtensions
                             if (currentSchedule == null)
                             {
                                 Debug.WriteLine($"Item {item}: scheduling delayed yield");
-                                currentSchedule =
-                                    scheduler.Schedule(itemTimestamp + minDelayBetweenItems, YieldPendingItem);
+                                var newSchedule = new SingleAssignmentDisposable();
+                                newSchedule.Disposable = scheduler.Schedule(lastIssuedTimestamp + minDelayBetweenItems,
+                                    () => YieldPendingItem(newSchedule));
+                                currentSchedule = newSchedule;
                             }
                         }
                     }
                 },
-                ex =>
-                {
-                    // If there is a pending item to be yielded, yield it now before completing the observable
-                    YieldPendingItem();
-                    obs.OnError(ex);
-                },
+                obs.OnError,
                 () =>
                 {
                     // If there is a pending item to be yielded, yield it now before completing the observable
-                    YieldPendingItem();
+                    lock (sync)
+                    {
+                        if (currentSchedule != null)
+                        {
+                            YieldItem(savedItem);
+                        }
+                    }
+
                     obs.OnCompleted();
                 });
 
-                void YieldPendingItem()
+                void YieldPendingItem(IDisposable schedule)
                 {
                     lock (sync)
                     {
-                        // Check the currentSchedule variable if it's now null, it means any pending item was
-                        // already yielded; in that case there's nothing to do
-                        if (currentSchedule != null)
+                        // Check the currentSchedule variable to see if it's changed since this function was scheduled
+                        // if it has, it means any pending item was already yielded; in that case there's nothing to do
+                        if (currentSchedule == schedule)
                         {
                             Debug.WriteLine($"Item {savedItem}: issuing delayed item");
                             YieldItem(savedItem);
